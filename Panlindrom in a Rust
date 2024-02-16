@@ -1,0 +1,19 @@
+fn is_palindrome(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    for i in 0..len / 2 {
+        if chars[i] != chars[len - i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let input = "radar";
+    if is_palindrome(input) {
+        println!("{} is a palindrome", input);
+    } else {
+        println!("{} is not a palindrome", input);
+    }
+}
