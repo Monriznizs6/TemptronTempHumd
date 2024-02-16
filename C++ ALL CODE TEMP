@@ -1,0 +1,565 @@
+#include <Adafruit_ADS1X15.h>  
+Adafruit_ADS1115 ads;
+#include <WiFi.h>
+#include <AntaresESP32MQTT.h>
+
+#define ACCESSKEY "28ed61adde7774e2:2a399b8428a5f7d7"
+#define WIFISSID "DBT"
+#define PASSWORD "telkom2021"
+#define projectName "Temptron607"
+#define deviceName "Monitoring"
+AntaresESP32MQTT antares(ACCESSKEY);
+
+#define ALARM 34
+#define HEAT 35
+#define FAN_1 32
+#define FAN_2 33
+#define FAN_3 25
+#define FAN_4 26
+#define FAN_5 27
+#define COOL 14
+#define DigWater 0
+#define DigFeed 2 
+#define SuhuLima 22
+#define PinKipasPWM1 25
+#define PinKipasPWM2 24
+
+
+String Pembatas ="==================";
+int ID_Data = 0;
+int AlarmNyala = 0;
+int HeaterNyala = 0;
+int Fan1Nyala = 0;
+bool Fan2Nyala;
+int CountFan2Mati = 0;
+int CountFan2Nyala = 0;
+int Fan3Nyala = 0;
+int Fan4Nyala = 0;
+int Fan5Nyala = 0;
+int CoolerNyala = 0;
+int CountWater = 0;
+int CountFeed = 0;
+
+float input_1;
+int16_t adc0;
+double output_1;
+
+float input_2;
+int16_t adc1;
+double output_2;
+
+float input_3;
+int16_t adc2;
+double output_3;
+
+float input_4;
+int16_t adc3;
+double output_4;
+
+float input_5;
+int adc4;
+double output_5;
+
+float inputPWM1;
+int16_t adc6;
+int outputPWM1;
+
+float inputPWM2;
+int16_t adc7;
+int outputPWM2;
+
+const int numReadings = 10;
+int readings[numReadings];     
+int readIndex = 0;              
+int total = 0;                  
+int averageSensor1 = 0;               
+int averageSensor2 = 0;
+int averageSensor3 = 0;
+int averageSensor4 = 0;
+int averageSensor5 = 0;
+int averageSensorPWM1 = 0;
+int averageSensorPWM2 = 0;
+
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+  antares.setDebug(true);
+  antares.wifiConnection(WIFISSID, PASSWORD);
+  antares.setMqttServer();
+  antares.checkMqttConnection();
+  randomSeed(analogRead(0));
+  ads.begin(0x48); 
+  pinMode(ALARM, INPUT_PULLUP);// High Saat Switch Mati
+  pinMode(HEAT, INPUT);
+  pinMode(FAN_1, INPUT);
+  pinMode(FAN_2, INPUT);
+  pinMode(FAN_3, INPUT);
+  pinMode(FAN_4, INPUT);
+  pinMode(FAN_5, INPUT_PULLUP);
+  pinMode(COOL, INPUT);
+  pinMode(SuhuLima, INPUT);
+  pinMode(PinKipasPWM1, INPUT);
+  pinMode(PinKipasPWM2, INPUT);
+  pinMode(DigWater, INPUT);
+  pinMode(DigFeed, INPUT);
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  antares.checkMqttConnection();
+  int rssi = WiFi.RSSI();
+  antares.add("No ID Paket Data", ID_Data++);
+  SensorSuhu1();
+  SensorSuhu2();
+  SensorSuhu3();
+  SensorSuhu4();
+  SensorSuhu5();
+  KipasPWM1();
+  KipasPWM2();
+  antares.add("================Kondisi Perangkat Eksternal", Pembatas);
+  RelayAlarm();
+  RelayHeat();
+  RelayFan1();
+  RelayFan2();
+  RelayFan3();
+  RelayFan4();
+  RelayFan5();
+  RelayCool();
+  antares.add("================Konsumsi Air Unggas", Pembatas);
+  DigitalInputWater();
+  antares.add("================Konsumsi Pakan Unggas", Pembatas);
+  DigitalInputFeed();
+  antares.add("================Sensor Suhu", Pembatas);
+  antares.add("Sensor Suhu 1", output_1);
+  antares.add("Sensor Suhu 2", output_2);
+  antares.add("Sensor Suhu 3", output_3);
+  antares.add("Sensor Suhu 4", output_4);
+  antares.add("Sensor Suhu 5", output_5);
+  antares.add("================Kecepatan Kipas", Pembatas);
+  antares.add("Kecepatan Kipas 1", outputPWM1);
+  antares.add("Kecepatan Kipas 2", outputPWM1);
+  antares.add("================Nilai RSSI", Pembatas);
+  antares.add("RSSI", rssi);
+  antares.publish(projectName, deviceName);
+Serial.println("");
+}
+
+double regress(double x) {  //Algoritma Rumus Pembacaan Suhu
+  int i;
+  double terms[] = {
+    -1.3416997484383398e+002,
+     3.0692331514589997e+000,
+    -1.9585473265503389e-002,
+     6.4792999247996778e-005,
+    -1.2510944173100613e-007,
+     1.4196092245388155e-010,
+    -8.7941206823462161e-014,
+     2.2969742660995184e-017
+};
+  
+  size_t csz = sizeof terms / sizeof *terms;
+  
+  double t = 1;
+  double r = 0;
+  for (i = 0; i < csz;i++) {
+    r += terms[i] * t;
+    t *= x;
+  }
+  return r;
+}
+
+double regressPWM(double x) {
+  double terms[] = {
+     8.3628394875004031e-001,
+     1.0085566179193685e-001,
+    -4.5402081165057659e-007
+};
+  
+  size_t csz = sizeof terms / sizeof *terms;
+  
+  double t = 1;
+  double r = 0;
+  for (int i = 0; i < csz;i++) {
+    r += terms[i] * t;
+    t *= x;
+  }
+  return r;
+}
+
+void SmoothingData()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc0;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+
+  averageSensor1 = total / numReadings / 12.58964143426295 / 1.29375;
+  Serial.println(averageSensor1);
+  delay(1);        
+}
+
+void SmoothingData2()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc1;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+  
+  averageSensor2 = total / numReadings / 15.5112016293279 / 1.144016227180527;
+  Serial.println(averageSensor2);
+  delay(1);        // delay in between reads for stability
+}
+
+void SmoothingData3()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc2;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+  
+  averageSensor3 = total / numReadings / 21.14598540145985 / 1.095354523227384;
+  Serial.println(averageSensor3);
+  delay(1);        // delay in between reads for stability
+}
+
+void SmoothingData4()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc3;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+
+  averageSensor4 = total / numReadings / 17.32669322709163 / 1.093253968253968;
+  Serial.println(averageSensor4);
+  delay(1);        // delay in between reads for stability
+}
+
+void SmoothingData5()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc4;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+
+  averageSensor5 = total / numReadings /3.67237 / 3.98501872659176 / 1.080524344569288;
+  Serial.println(averageSensor5);
+  delay(1);        // delay in between reads for stability
+}
+
+void SmoothingData6()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc6;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    readIndex = 0;
+  }
+
+  averageSensorPWM1 = total / numReadings / 4 / 2.314217443249701;
+  Serial.println(averageSensorPWM1);
+  delay(1);        // delay in between reads for stability
+}
+
+void SmoothingData7()
+{
+  total = total - readings[readIndex];
+  readings[readIndex] = adc7;
+  total = total + readings[readIndex];
+  readIndex = readIndex + 1;
+
+  if (readIndex >= numReadings) {
+    // ...wrap around to the beginning:
+    readIndex = 0;
+  }
+
+  averageSensorPWM2 = total / numReadings / 4;
+  Serial.println(averageSensorPWM2);
+  delay(1);        // delay in between reads for stability
+}
+
+void SensorSuhu1(){
+  Serial.print("Tegangan ADC Sensor 1: ");
+  adc0 = ads.readADC_SingleEnded(0);//Laptop
+  //adc0 = ads.readADC_SingleEnded(0)/26.525 - 7;//Powerbank
+  SmoothingData();
+  Serial.println((averageSensor1)) ;
+  Serial.println((adc0)) ;
+
+  input_1 = (averageSensor1);
+  input_1 = (adc0);
+  output_1 = regress(input_1);
+  double regress(double x);
+  Serial.print("Suhu 1:");
+  Serial.println(output_1);
+  delay(1000);
+}
+
+void SensorSuhu2(){
+  Serial.print("Tegangan ADC Sensor Suhu 2: ");
+  adc1 = ads.readADC_SingleEnded(1);
+  SmoothingData2();
+  Serial.println((averageSensor2));
+
+  input_2 = ((averageSensor2));
+  output_2 = regress(input_2);
+  double regress(double x);
+  Serial.print("Suhu 2: ");
+  Serial.println(output_2);
+  delay(1000);
+}
+
+void SensorSuhu3(){
+  Serial.print("Tegangan ADC Sensor Suhu 3: ");
+  adc2 = ads.readADC_SingleEnded(2);
+  SmoothingData3();
+  Serial.println((averageSensor3));
+
+  input_3 = ((averageSensor3));
+  output_3 = regress(input_3);
+  double regress(double x);
+  Serial.print("Suhu 3: ");
+  Serial.println(output_3);
+  delay(1000);
+}
+
+void SensorSuhu4(){
+  Serial.print("Tegangan ADC Sensor Suhu 4: ");
+  adc3 = ads.readADC_SingleEnded(3);
+  SmoothingData4();
+  Serial.println((averageSensor4));
+
+  input_4 = ((averageSensor4));
+  output_4 = regress(input_4);
+  double regress(double x);
+  Serial.print("Suhu 4: ");
+  Serial.println(output_4);
+  delay(1000);
+}
+
+void SensorSuhu5(){
+  Serial.print("Tegangan ADC Sensor Suhu 5: ");
+  adc4 = analogRead(SuhuLima);
+  SmoothingData5();
+  input_5 = averageSensor5;
+  Serial.println(input_5);
+  output_5 = regress(input_5);
+  double regress(double x);
+  Serial.print("Suhu 5: ");
+  Serial.println(output_5);
+  delay(1000);
+}
+
+void KipasPWM1(){
+  adc6 = analogRead(PinKipasPWM1);
+  Serial.print("Tegangan ADC:");
+  SmoothingData6();
+
+  inputPWM1 = averageSensorPWM1;
+  Serial.println(inputPWM1);
+  outputPWM1 = regressPWM(inputPWM1);// Mode 0V - 10V Channel 1&2
+  double regressPWM(double x);
+  Serial.print("Kecepatan: ");
+  Serial.println(outputPWM1);
+delay(1000);
+}
+
+void KipasPWM2(){
+  adc7 = analogRead(PinKipasPWM2);
+  Serial.print("Tegangan ADC:");
+  SmoothingData7();
+
+  inputPWM2 = averageSensorPWM2;
+  Serial.println(inputPWM2);
+  outputPWM2 = regressPWM(inputPWM2);// Mode 0V - 10V Channel 1&2
+  double regressPWM(double x);
+  Serial.print("Kecepatan: ");
+  Serial.println(outputPWM2);
+delay(1000);
+}
+
+void RelayAlarm(){
+bool state1 = digitalRead(ALARM);
+Serial.println(digitalRead(ALARM)); 
+  if (state1) { 
+    Serial.println("ALARM MENYALA!"); 
+  } else {
+    Serial.println("ALARM MATI");
+    }
+    delay(1000); // wait for one second
+  }   
+
+void RelayHeat(){
+bool state2 = digitalRead(HEAT);
+  if (state2) { 
+    Serial.println("HEATER MENYALA!");
+    String StateHeater = "Menyala";    
+    antares.add("Keadaan Heater",StateHeater);
+    HeaterNyala = 0;
+  }
+    else {
+    if(HeaterNyala > 6){
+    Serial.println("HEATER MATI!"); 
+    String StateHeater = "Mati";    
+    antares.add("Keadaan Heater",StateHeater); 
+    }  else {
+    HeaterNyala++;
+    Serial.println("HEATER MENYALA!");
+    String StateHeater = "Menyala";    
+    antares.add("Keadaan Heater",StateHeater);
+    }
+  }  
+  delay(1000); // wait for one second 
+}
+
+void RelayFan1(){
+bool state3 = digitalRead(FAN_1);
+ Serial.println(digitalRead(FAN_1)); 
+  if (state3) { 
+    Serial.println("FAN 1 MATI!"); 
+  } else {
+    Serial.println("FAN 1 MENYALA!");
+    }
+    delay(1000); // wait for one second
+  } 
+
+void RelayFan2(){
+bool state4 = digitalRead(FAN_2); 
+if (state4) { 
+    Serial.println("FAN 2 MATI!"); 
+    String StateFan2 = "Mati";
+    antares.add("Keadaan FAN 2", StateFan2);
+  } else {
+    Serial.println("FAN 2 MENYALA");
+    String StateFan2 = "Menyala";    
+    antares.add("Keadaan FAN 2", StateFan2);
+    }  
+  delay(1000); // wait for one second 
+}
+
+void RelayFan3(){
+bool state5 = digitalRead(FAN_3);
+if (state5) { 
+    Serial.println("FAN 3 MENYALA!");
+    String StateFan3 = "Menyala";    
+    antares.add("Keadaan FAN 3",StateFan3);
+    Fan3Nyala = 0;
+  }
+    else {
+    if(Fan3Nyala > 10){
+    Serial.println("FAN 3 MATI!"); 
+    String StateFan3 = "Mati";    
+    antares.add("Keadaan FAN 3",StateFan3); 
+    }  else {
+    Fan3Nyala++;
+    Serial.println("FAN 3 MENYALA!");
+    String StateFan3 = "Menyala";    
+    antares.add("Keadaan FAN 3",StateFan3);
+    }
+  }  
+  delay(1000); // wait for one second }
+}
+
+void RelayFan4(){
+bool state6 = digitalRead(FAN_4);
+if (state6) { 
+    Serial.println("FAN 4 MENYALA!");
+    String StateFan4 = "Menyala";    
+    antares.add("Keadaan FAN 4",StateFan4);
+    Fan4Nyala = 0;
+  }
+    else {
+    if(Fan4Nyala > 8){
+    Serial.println("FAN 4 MATI!"); 
+    String StateFan4 = "Mati";    
+    antares.add("Keadaan FAN 4",StateFan4); 
+    }  else {
+    Fan4Nyala++;
+    Serial.println("FAN 4 MENYALA!");
+    String StateFan4 = "Menyala";    
+    antares.add("Keadaan FAN 4",StateFan4);
+    }
+  }  
+  delay(1000); // wait for one second 
+}
+
+void RelayFan5(){
+bool state7 = digitalRead(FAN_5);
+Serial.println(digitalRead(FAN_5));
+if (state7) { 
+    Serial.println("FAN 5 MENYALA!");
+    String StateFan5 = "Menyala";    
+    antares.add("Keadaan FAN 5",StateFan5);
+  }
+    else {
+    Serial.println("FAN 5 MATI!"); 
+    String StateFan5 = "Mati";    
+    antares.add("Keadaan FAN 5",StateFan5); 
+    }  
+  delay(1000); // wait for one second 
+}
+
+void RelayCool(){
+bool state8 = digitalRead(COOL); 
+ Serial.println(digitalRead(COOL)); 
+  if (state8) { 
+    Serial.println("COOLER MATI!"); 
+  } else {
+    Serial.println("COOLER MENYALA!");
+    }
+    delay(1000); // wait for one second
+}
+
+void DigitalInputWater()
+{
+  bool StateDigWater = digitalRead(DigWater);
+  if(StateDigWater){
+    CountWater++;
+    Serial.println("Water Meter Bertambah");
+    Serial.print("WATER LEVEL: ");
+    Serial.println((CountWater));
+    antares.add("Water Level", CountWater);
+  } else {
+    Serial.println("Water Meter Tetap");
+    antares.add("Water Level", CountWater);
+  }
+  delay(1000);
+}
+
+void DigitalInputFeed()
+{
+  bool StateDigFeed = digitalRead(DigFeed);
+  if(StateDigFeed){
+    CountFeed++;
+    Serial.println("Feed Meter Bertambah");
+    Serial.print("FEED LEVEL: ");
+    Serial.println((CountFeed));
+    antares.add("Feed Level", CountFeed);
+  } else {
+    Serial.println("Feed Meter Tetap");
+    antares.add("Feed Level", CountFeed);
+  }
+  delay(1000);
+}
